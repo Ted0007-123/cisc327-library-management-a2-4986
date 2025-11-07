@@ -151,7 +151,7 @@ def insert_book(title: str, author: str, isbn: str, total_copies: int, available
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
+    except Exception:
         conn.close()
         return False
 
@@ -166,7 +166,7 @@ def insert_borrow_record(patron_id: str, book_id: int, borrow_date: datetime, du
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
+    except Exception:
         conn.close()
         return False
 
@@ -174,13 +174,20 @@ def update_book_availability(book_id: int, change: int) -> bool:
     """Update the available copies of a book by a given amount (+1 for return, -1 for borrow)."""
     conn = get_db_connection()
     try:
-        conn.execute('''
-            UPDATE books SET available_copies = available_copies + ? WHERE id = ?
-        ''', (change, book_id))
+        row = conn.execute('SELECT available_copies FROM books WHERE id=?', (book_id,)).fetchone()
+        if not row:
+            conn.close()
+            return False
+        current = row['available_copies']
+        new_value = current + change
+        if new_value < 0:
+            conn.close()
+            return False
+        conn.execute('UPDATE books SET available_copies = ? WHERE id = ?', (new_value, book_id))
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
+    except Exception:
         conn.close()
         return False
 
@@ -196,6 +203,56 @@ def update_borrow_record_return_date(patron_id: str, book_id: int, return_date: 
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
+    except Exception:
         conn.close()
         return False
+
+# --------- 👇 추가: 검색/이력/연체료 계산 유틸(형식 유지, 기능만 보강) ---------
+
+def search_books_case_insensitive(search_term: str, search_type: str) -> List[Dict]:
+    """Case-insensitive search by title/author/isbn."""
+    search_type = (search_type or "title").lower()
+    if search_type not in ("title", "author", "isbn"):
+        search_type = "title"
+    q = f"%{(search_term or '').lower()}%"
+    conn = get_db_connection()
+    rows = conn.execute(f"SELECT * FROM books WHERE LOWER({search_type}) LIKE ?", (q,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_patron_history(patron_id: str) -> List[Dict]:
+    """Full borrow history for a patron."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM borrow_records WHERE patron_id=? ORDER BY borrow_date",
+        (patron_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_active_borrow_due_date(patron_id: str, book_id: int) -> Optional[datetime]:
+    """Return due_date of the latest active (unreturned) borrow record."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT due_date FROM borrow_records "
+        "WHERE patron_id=? AND book_id=? AND return_date IS NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (patron_id, book_id)
+    ).fetchone()
+    conn.close()
+    return datetime.fromisoformat(row["due_date"]) if row else None
+
+def compute_late_fee_from_due(due_date: datetime) -> float:
+    """
+    Fee rules (A2/R5):
+      - overdue days d <= 0: $0
+      - first 7 overdue days: $0.50/day
+      - afterwards: $1.00/day
+      - cap per book: $15
+    """
+    d = (datetime.now().date() - due_date.date()).days
+    if d <= 0:
+        return 0.0
+    first = min(7, d) * 0.5
+    rest = max(0, d - 7) * 1.0
+    return min(15.0, round(first + rest, 2))
