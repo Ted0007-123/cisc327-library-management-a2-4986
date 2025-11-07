@@ -1,7 +1,15 @@
+import os
+import sys
 import importlib
 import sqlite3
 import pytest
-import database
+
+THIS_DIR = os.path.dirname(__file__)
+PROJECT_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+import database 
 
 
 def _load_app():
@@ -21,6 +29,7 @@ def flask_app():
 
 @pytest.fixture()
 def client(flask_app):
+    """Flask test client."""
     return flask_app.test_client()
 
 
