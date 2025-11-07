@@ -1,43 +1,19 @@
+# conftest.py (REPO ROOT)
 import os
 import sys
-import importlib
 import sqlite3
 import pytest
 
-THIS_DIR = os.path.dirname(__file__)
-PROJECT_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))
+
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import database 
+import database
 
 
-def _load_app():
-    app_mod = importlib.import_module("app")
-    if hasattr(app_mod, "create_app"):
-        return app_mod.create_app()
-    return getattr(app_mod, "app", None)
-
-
-@pytest.fixture(scope="session")
-def flask_app():
-    app = _load_app()
-    if app is None:
-        pytest.skip("Flask app not available (app.create_app/app)")
-    return app
-
-
-@pytest.fixture()
-def client(flask_app):
-    """Flask test client."""
-    return flask_app.test_client()
-
-
-@pytest.fixture(autouse=True)
-def in_memory_db(monkeypatch):
-    conn = sqlite3.connect(":memory:")
+def _create_schema(conn: sqlite3.Connection):
     conn.row_factory = sqlite3.Row
-
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS books (
@@ -45,16 +21,18 @@ def in_memory_db(monkeypatch):
             title TEXT NOT NULL,
             author TEXT NOT NULL,
             isbn TEXT UNIQUE NOT NULL,
-            copies INTEGER NOT NULL DEFAULT 0
+            total_copies INTEGER NOT NULL,
+            available_copies INTEGER NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS borrows (
+        CREATE TABLE IF NOT EXISTS borrow_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patron_id TEXT NOT NULL,
             book_id INTEGER NOT NULL,
             borrow_date TEXT NOT NULL,
             due_date TEXT NOT NULL,
-            return_date TEXT
+            return_date TEXT,
+            FOREIGN KEY (book_id) REFERENCES books(id)
         );
 
         CREATE TABLE IF NOT EXISTS patrons (
@@ -66,7 +44,18 @@ def in_memory_db(monkeypatch):
         """
     )
 
-    monkeypatch.setattr(database, "get_db_connection", lambda: conn)
 
+@pytest.fixture(autouse=True)
+def _auto_inmemory_db(monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    _create_schema(conn)
+    monkeypatch.setattr(database, "get_db_connection", lambda: conn)
+    try:
+        yield
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def temp_db():
     yield
-    conn.close()
