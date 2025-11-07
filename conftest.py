@@ -1,25 +1,20 @@
-# conftest.py (REPO ROOT)
+
 import os
 import sys
 import sqlite3
 import pytest
 import importlib
+import uuid
 
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import database  # noqa: E402
 
-import database 
-
-DB_URI = "file:lmstest?mode=memory&cache=shared"
-
-def _open_conn():
-    conn = sqlite3.connect(DB_URI, uri=True, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 def _create_schema(conn: sqlite3.Connection):
+    conn.row_factory = sqlite3.Row
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS books (
@@ -50,22 +45,32 @@ def _create_schema(conn: sqlite3.Connection):
         """
     )
 
-@pytest.fixture(autouse=True, scope="session")
-def _shared_memdb_session():
-    keeper = _open_conn()
+
+def _open_conn(db_uri: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_uri, uri=True, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@pytest.fixture(autouse=True)
+def _per_test_memdb(monkeypatch):
+    db_uri = f"file:lmstest_{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper = _open_conn(db_uri)   
     _create_schema(keeper)
-    original = getattr(database, "get_db_connection", None)
-    database.get_db_connection = _open_conn  # type: ignore[attr-defined]
+
+    def _get_conn():
+        return _open_conn(db_uri)
+
+    monkeypatch.setattr(database, "get_db_connection", _get_conn)
+
     try:
         yield
     finally:
-        if original:
-            database.get_db_connection = original 
         keeper.close()
+
 
 @pytest.fixture
 def temp_db():
-
     yield
 
 def _load_flask_app():
@@ -74,8 +79,8 @@ def _load_flask_app():
         return app_mod.create_app()
     return getattr(app_mod, "app", None)
 
-@pytest.fixture(scope="session")
-def client():
+@pytest.fixture
+def client(temp_db):
     app = _load_flask_app()
     if app is None:
         pytest.skip("Flask app not available (app.create_app/app)")
