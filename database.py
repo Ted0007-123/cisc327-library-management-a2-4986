@@ -207,7 +207,6 @@ def update_borrow_record_return_date(patron_id: str, book_id: int, return_date: 
         conn.close()
         return False
 
-# --------- 👇 추가: 검색/이력/연체료 계산 유틸(형식 유지, 기능만 보강) ---------
 
 def search_books_case_insensitive(search_term: str, search_type: str) -> List[Dict]:
     """Case-insensitive search by title/author/isbn."""
